@@ -10,22 +10,6 @@ EMAIL = "24f2006741@ds.study.iitm.ac.in"
 app = FastAPI()
 
 # -----------------------
-# CORS Middleware
-# -----------------------
-allowed_origins = [
-    "https://app-sxsi1j.example.com",
-    "https://exam.sanand.workers.dev"
-]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# -----------------------
 # Request Context Middleware
 # -----------------------
 class RequestContextMiddleware(BaseHTTPMiddleware):
@@ -38,11 +22,12 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         request.state.request_id = request_id
 
         response = await call_next(request)
+
+        # Always echo X-Request-ID in response header
         response.headers["X-Request-ID"] = request_id
 
         return response
 
-app.add_middleware(RequestContextMiddleware)
 
 # -----------------------
 # Rate Limiting Middleware
@@ -60,23 +45,49 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if client_id not in client_requests:
             client_requests[client_id] = []
 
+        # Remove expired timestamps
         client_requests[client_id] = [
             t for t in client_requests[client_id]
             if now - t < WINDOW
         ]
 
+        # Rate limit exceeded
         if len(client_requests[client_id]) >= RATE_LIMIT:
-            return JSONResponse(
+            response = JSONResponse(
                 status_code=429,
                 content={"detail": "Rate limit exceeded"}
             )
+
+            request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+            response.headers["X-Request-ID"] = request_id
+
+            return response
 
         client_requests[client_id].append(now)
 
         response = await call_next(request)
         return response
 
+
+# -----------------------
+# Middleware Order
+# -----------------------
+app.add_middleware(RequestContextMiddleware)
+
 app.add_middleware(RateLimitMiddleware)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://app-sxsi1j.example.com",
+        "https://exam.sanand.workers.dev",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["X-Request-ID"],
+)
+
 
 # -----------------------
 # API Endpoint
